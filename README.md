@@ -1,34 +1,72 @@
 # Arpey MusicFree Aggregator
 
-一个面向 MusicFree 安卓版与桌面版的 CommonJS 聚合插件框架。
+MusicFree 插件 + 自建 Node.js 聚合服务端。支持把多个**合法授权**的上游搜索/播放 API 统一成一个服务。
 
-## 重要说明
+## 当前版本：0.2.0
 
-本项目**不会内置网易云、QQ音乐、酷狗、酷我或 B 站的非官方解析接口**，也不会破解会员、绕过 DRM、规避地区/版权限制。
+- MusicFree 插件只请求统一服务端。
+- 服务端提供健康检查、平台状态、并行搜索、去重、播放地址回退。
+- 支持网易云、QQ音乐、酷狗、酷我、B站五个上游配置槽位。
+- 未配置上游时会明确返回空结果；不会伪造歌曲或播放 URL。
+- 播放响应必须 `authorized: true` 且为 HTTPS。
 
-五个平台的搜索与播放适配器都已预留，但要真正启用某个平台，必须配置你有权使用的官方 API、合作 API，或你自己运营且已取得相应授权的服务端。没有配置时，插件会跳过该平台并写日志，不会伪造播放链接。
-
-MusicFree 插件协议本身是 CommonJS 模块；主要入口为 `search(query, page, type)` 和 `getMediaSource(mediaItem, quality)`。桌面版与安卓版均可安装 `.js` 插件，具体请以当前客户端版本为准。
-
-## 项目结构
+## 目录
 
 ```text
-Arpey-MusicFree-Aggregator/
-├─ src/
-│  └─ plugin.js             # 插件主程序：五平台并行搜索、去重、播放回退
-├─ dist/
-│  └─ ArpeyMusicAggregator.js # 构建后直接安装到 MusicFree
-├─ scripts/
-│  └─ build.js              # 构建脚本
-├─ test/
-│  └─ smoke.js              # Node.js 冒烟测试
-├─ package.json
-└─ README.md
+server/                 # 自建 Node.js API 服务
+  index.js
+  .env.example
+  README.md
+src/plugin.js           # MusicFree 客户端插件源码
+dist/ArpeyMusicAggregator.js
+scripts/build.js
+test/
 ```
 
-## Windows 开发环境
+## 第一步：启动服务端（Windows）
 
-安装 Node.js 18 或更高版本，然后在项目目录打开 PowerShell：
+安装 Node.js 18+，下载仓库后打开 PowerShell：
+
+```powershell
+cd Arpey-MusicFree-Aggregator
+Copy-Item server/.env.example server/.env
+notepad server/.env
+node server/index.js
+```
+
+检查服务：
+- http://127.0.0.1:8787/api/health
+- http://127.0.0.1:8787/api/providers
+
+服务端默认监听 `0.0.0.0:8787`。当前没有配置上游时，health 会正常，但搜索结果仍为空。这是正常现象。
+
+## 第二步：让手机访问电脑
+
+安卓手机和 Windows 电脑连接同一个 Wi-Fi。在 Windows PowerShell 运行：
+
+```powershell
+ipconfig
+```
+
+找到当前 Wi-Fi 网卡的 IPv4 地址，例如 `192.168.1.20`。在 `src/plugin.js` 把：
+
+```js
+const API_BASE_URL = "http://127.0.0.1:8787";
+```
+
+改成：
+
+```js
+const API_BASE_URL = "http://192.168.1.20:8787";
+```
+
+在 Windows 防火墙中允许专用网络入站 TCP 8787。手机浏览器打开 `http://192.168.1.20:8787/api/health`，看到 `ok: true` 才说明手机已连通电脑服务端。
+
+桌面版和服务端在同一台电脑时可使用 `127.0.0.1`。手机不能把自己的 `127.0.0.1` 当作电脑地址。
+
+如果要在外网使用，应部署到 VPS 并配置 HTTPS；不要把未鉴权服务直接暴露到公网。
+
+## 第三步：构建并安装插件
 
 ```powershell
 npm install
@@ -36,107 +74,19 @@ npm test
 npm run build
 ```
 
-构建产物：
+安装 `dist/ArpeyMusicAggregator.js` 到 MusicFree。每次修改 `API_BASE_URL` 后都要重新构建并重新安装更新后的 JS。
 
-```text
-dist\ArpeyMusicAggregator.js
-```
+## 上游接口配置（必须有授权）
 
-在 MusicFree：
-- 安卓：设置 / 插件设置 / 从本地安装，选择该 JS 文件。
-- 桌面：插件管理 / 从本地安装，选择该 JS 文件。
+在 `server/.env` 配置对应平台的 `*_SEARCH_URL`、`*_PLAY_URL`、`*_TOKEN`。具体统一契约和样例见 [server/README.md](server/README.md)。
 
-## 接入平台 API 的统一契约
+当前仓库只实现了聚合网关与适配协议，并未内置任何平台的非官方解析器，也没有自动获得平台 API 权限。未取得授权 API 前，服务端不会凭空产生歌曲列表或音频地址。
 
-为了避免每个平台的数据结构不同，建议先由你有权调用的 API 网关统一成下面的 JSON。
+## API
 
-### 1. 搜索接口
+- `GET /api/health`
+- `GET /api/providers`
+- `GET /api/search?q=关键词&page=1`
+- `GET /api/play?provider=qq&id=上游歌曲ID&title=歌曲名&artist=歌手&quality=standard`
 
-插件会向每个平台配置的 `searchEndpoint` 发起 GET 请求：
-
-```text
-GET /search?q=关键词&page=1&limit=20
-Authorization: Bearer <token>   # 配置 token 时才发送
-```
-
-返回：
-
-```json
-{
-  "isEnd": true,
-  "data": [
-    {
-      "id": "provider-track-id",
-      "title": "歌曲名",
-      "artist": "歌手",
-      "album": "专辑",
-      "artwork": "https://example.com/cover.jpg",
-      "duration": 213000
-    }
-  ]
-}
-```
-
-### 2. 授权播放接口
-
-插件会按优先顺序尝试 `playEndpoint`。先尝试歌曲所属平台，再尝试其他已配置平台：
-
-```text
-GET /play?id=provider-track-id&title=歌曲名&artist=歌手&quality=standard
-Authorization: Bearer <token>
-```
-
-成功响应必须明确返回授权状态：
-
-```json
-{
-  "authorized": true,
-  "url": "https://合法授权的实际音频地址",
-  "headers": {
-    "Referer": "https://provider.example/"
-  }
-}
-```
-
-未授权、无权限、无版权或没有真实 HTTPS 地址时，接口必须返回 `authorized: false` 或错误状态。插件会继续尝试下一个来源。
-
-**注意：** 自动回退只能处理“获取播放地址阶段”的失败。如果某个 CDN 在 MusicFree 开始播放后才断流，插件协议没有提供播放器运行时的逐段播放失败回调，因此无法保证在所有断流场景下无缝切换。
-
-## 配置五个平台
-
-编辑 `src/plugin.js` 顶部的 `PROVIDERS` 数组，将每个平台的：
-
-- `searchEndpoint`：你有权使用的搜索接口
-- `playEndpoint`：你有权使用的授权播放接口
-- `token`：服务端签发的访问令牌（不要提交到公开 Git 仓库）
-
-填好后执行：
-
-```powershell
-npm test
-npm run build
-```
-
-重新安装 `dist/ArpeyMusicAggregator.js`。
-
-### 当前默认状态
-
-五个平台的接口地址与令牌默认为空。因此，项目下载后可以构建、安装、运行和测试，但在配置授权 API 前不会返回实际歌曲结果。这是有意设计的安全默认值。
-
-## 日志
-
-插件使用 `console.info / warn / error` 输出：
-- 哪个平台未配置
-- 各平台搜索结果数量
-- 单个平台请求异常
-- 播放回退尝试顺序
-- 全部来源失败原因
-
-日志具体显示位置取决于 MusicFree 客户端版本和调试环境。
-
-## 开发顺序建议
-
-1. 先取得一个平台的正式 API/合作 API 访问权限，打通搜索和播放。
-2. 再逐个平台接入，先验证账号权限与版权范围。
-3. 为每个平台补充单元测试、超时与限流策略。
-4. 最后做匹配评分（歌名、歌手、时长、版本）和缓存。
+详见 [server/README.md](server/README.md)。
