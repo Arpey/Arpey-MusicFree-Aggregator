@@ -1,0 +1,10 @@
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
+const source = fs.readFileSync(path.join(__dirname, "..", "server", "index.js"), "utf8");
+assert.match(source, /\/api\/health/);
+assert.match(source, /\/api\/search/);
+assert.match(source, /\/api\/play/);
+assert.match(source, /body\.authorized !== true/);
+assert.match(source, /https:/);
+console.log("Server contract smoke test passed.");
